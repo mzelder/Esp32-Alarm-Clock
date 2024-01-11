@@ -42,7 +42,11 @@ esp_now_peer_info_t peerInfo;
 void setup() {
   Serial.begin(115200);
   
-  WiFi.mode(WIFI_STA);
+  WiFi.mode(WIFI_STA);  
+  WiFi.begin(ssid, password);
+  
+  connectWifi(); // Initialize WIFI and ESP-NOW
+  
   // [Inicjalizacja TFT i WiFi...]
   tft.initR(INITR_BLACKTAB);
   tft.setFont(&FreeMono9pt7b);
@@ -50,7 +54,6 @@ void setup() {
   tft.setTextSize(1);
   tft.setTextColor(ST77XX_WHITE);
 
-  //connectWifi(); // Initialize WIFI and ESP-NOW
 
   if (esp_now_init() != ESP_OK) {
     Serial.println("Błąd inicjalizacji ESP-NOW");
@@ -60,19 +63,21 @@ void setup() {
   esp_now_register_send_cb(OnDataSent);
   esp_now_register_recv_cb(OnDataRecv);
 
-  peerInfo.channel = 0;  
+  peerInfo.channel = 6;  
   peerInfo.encrypt = false;
   memcpy(peerInfo.peer_addr, remoteMac, 6);
-  
+
   if (esp_now_add_peer(&peerInfo) != ESP_OK) {
     Serial.println("Błąd dodawania pary ESP-NOW");
+    return;
   }
 }
 
+
 void loop() {
-  //if (WiFi.status() != WL_CONNECTED) {
-    //connectWifi(); // Reconnect to Wi-Fi if connection is lost
-  //}
+  if (WiFi.status() != WL_CONNECTED) {
+    connectWifi(); // Reconnect to Wi-Fi if connection is lost
+  }
 
   timeClient.update();
   displayDateTime();
@@ -105,7 +110,6 @@ String macAddressToString(const uint8_t* macAddr) {
 
 
 void connectWifi() {
-  WiFi.begin(ssid, password);  
   tft.fillScreen(ST77XX_BLACK);
   
   while (WiFi.status() != WL_CONNECTED) {  
@@ -148,4 +152,3 @@ void displayDateTime() {
   tft.setCursor(25, 20); // Adjust cursor position as needed
   tft.print(currentDate);
 }
-

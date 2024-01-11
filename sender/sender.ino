@@ -9,6 +9,9 @@
 uint8_t remoteMac[] = {0xD4, 0x8A, 0xFC, 0x9F, 0x2F, 0x88};
 esp_now_peer_info_t peerInfo;
 
+const char* ssid = "iPhone";
+const char* password = "12345678";
+
 typedef struct test_struct {
   int x;
 } test_struct;
@@ -23,6 +26,7 @@ void setup() {
 
   // Inicjalizacja WiFi w trybie STA
   WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
 
   // Inicjalizacja ESP-NOW
   if (esp_now_init() != ESP_OK) {
@@ -33,7 +37,7 @@ void setup() {
   esp_now_register_send_cb(OnDataSent);
   esp_now_register_recv_cb(OnDataRecv);
 
-  peerInfo.channel = 0;  
+  peerInfo.channel = 6;  
   peerInfo.encrypt = false;
   memcpy(peerInfo.peer_addr, remoteMac, 6);
 
@@ -50,7 +54,7 @@ void loop() {
   esp_err_t result = esp_now_send(0, (uint8_t *) &test, sizeof(test_struct));
   Serial.println(result == ESP_OK ? "Sent with success" : "Error sendint the data");
     
-  delay(2000);
+  delay(500);
 }
 
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
