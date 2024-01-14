@@ -1,3 +1,6 @@
+// BUG -> sender can't send data in the same moment when
+// reciver try to get data from wifi for hour management
+
 #include <Adafruit_GFX.h>
 #include <Fonts/FreeMono9pt7b.h>
 #include <Adafruit_ST7735.h>
@@ -24,6 +27,11 @@ NTPClient timeClient(ntpUDP, "pool.ntp.org", 3600, 60000); // Adjust for your ti
 #define TFT_MOSI  23
 #define TFT_SCLK  18
 
+// Buttons pin definitions
+#define BTN_UP 27
+#define BTN_MIDDLE 26
+#define BTN_DOWN 25
+
 typedef struct test_struct {
   int x;
   int y;
@@ -39,22 +47,38 @@ Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RS
 uint8_t remoteMac[] = {0xD4, 0x8A, 0xFC, 0x9D, 0xCF, 0xA4};
 esp_now_peer_info_t peerInfo;
 
+bool alarm_mode = false;
+int alarmHour = 0;
+int alarmMinute = 0;
+bool isSettingHour = true;
+
+bool lastMiddleButtonState = HIGH;
+unsigned long lastDebounceTime = 0;
+unsigned long debounceDelay = 50; // Debounce delay in milliseconds
+bool hourChanged = false;
+bool minuteChanged = false;
+
 void setup() {
+  // pin mode setup
+  pinMode(BTN_UP, INPUT_PULLUP);
+  pinMode(BTN_MIDDLE, INPUT_PULLUP);
+  pinMode(BTN_DOWN, INPUT_PULLUP);
+  
   Serial.begin(115200);
   
-  WiFi.mode(WIFI_STA);  
-  WiFi.begin(ssid, password);
-  
-  connectWifi(); // Initialize WIFI and ESP-NOW
-  
-  // [Inicjalizacja TFT i WiFi...]
+  // Initalize screen
   tft.initR(INITR_BLACKTAB);
   tft.setFont(&FreeMono9pt7b);
   tft.setRotation(1);
   tft.setTextSize(1);
   tft.setTextColor(ST77XX_WHITE);
-
-
+  
+  // Wifi setup
+  WiFi.mode(WIFI_STA);  
+  WiFi.begin(ssid, password);
+  connectWifi(); // Initialize WIFI and ESP-NOW
+  
+  // esp-now setup
   if (esp_now_init() != ESP_OK) {
     Serial.println("Błąd inicjalizacji ESP-NOW");
     return;
@@ -79,10 +103,17 @@ void loop() {
     connectWifi(); // Reconnect to Wi-Fi if connection is lost
   }
 
-  timeClient.update();
-  displayDateTime();
-
-  delay(1000); // Update time every second
+  if (digitalRead(BTN_MIDDLE) == LOW) {
+    alarm_mode = true; 
+  }
+  
+  if (alarm_mode == false) {
+    timeClient.update();
+    displayDateTime();
+    delay(1000);
+  } else if (alarm_mode == true) {
+    alarmSetter();
+  }
 }
 
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
@@ -152,3 +183,64 @@ void displayDateTime() {
   tft.setCursor(25, 20); // Adjust cursor position as needed
   tft.print(currentDate);
 }
+
+// Setting alarm clock 
+void alarmSetter() {
+  bool upButtonState = digitalRead(BTN_UP) == LOW;
+  bool downButtonState = digitalRead(BTN_DOWN) == LOW;
+  bool middleButtonState = digitalRead(BTN_MIDDLE) == LOW;
+
+  if (upButtonState) {
+    if (isSettingHour) {
+      alarmHour = (alarmHour + 1) % 24;
+      hourChanged = true;
+    } else {
+      alarmMinute = (alarmMinute + 1) % 60;
+      minuteChanged = true;
+    }
+    delay(200); // Debounce delay for UP and DOWN buttons
+  }
+  
+  if (downButtonState) {
+    if (isSettingHour) {
+      alarmHour = (alarmHour + 23) % 24;
+      hourChanged = true;
+    } else {
+      alarmMinute = (alarmMinute + 59) % 60;
+      minuteChanged = true;
+    }
+    delay(200); // Debounce delay for UP and DOWN buttons
+  }
+
+  // Debounce for middle button
+  if (middleButtonState != lastMiddleButtonState) {
+    lastDebounceTime = millis();
+  }
+
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    if (middleButtonState == LOW && lastMiddleButtonState == HIGH) {
+      if (isSettingHour) {
+        isSettingHour = false;
+      } else {
+        alarm_mode = false;
+        isSettingHour = true;
+      }
+    }
+  }
+  lastMiddleButtonState = middleButtonState;
+
+  // Update the screen only if there is a change
+  if (hourChanged || minuteChanged) {
+    tft.fillScreen(ST77XX_BLACK);
+    tft.setCursor(30, 50);
+    tft.print("Set Alarm: ");
+    tft.setCursor(30, 70);
+    tft.print(alarmHour);
+    tft.print(":");
+    if (alarmMinute < 10) tft.print("0");
+    tft.print(alarmMinute);
+    hourChanged = false;
+    minuteChanged = false;
+  }
+}
+

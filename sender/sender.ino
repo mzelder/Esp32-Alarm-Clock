@@ -51,6 +51,13 @@ void setup() {
 void loop() {
   test.x = random(0,20);
 
+  Serial.print("Button status: ");
+  Serial.println(digitalRead(BUTTON_PIN));
+  if (digitalRead(BUTTON_PIN) == LOW) {
+    Serial.println("Button pressed");
+    delay(200);
+  }
+
   esp_err_t result = esp_now_send(0, (uint8_t *) &test, sizeof(test_struct));
   Serial.println(result == ESP_OK ? "Sent with success" : "Error sendint the data");
     
