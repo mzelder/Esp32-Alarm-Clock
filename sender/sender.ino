@@ -49,40 +49,14 @@ void setup() {
 }
 
 void loop() {
-  test.x = random(0,20);
 
-  Serial.print("Button status: ");
-  Serial.println(digitalRead(BUTTON_PIN));
-  if (digitalRead(BUTTON_PIN) == LOW) {
-    Serial.println("Button pressed");
-    delay(200);
-  }
-
-  esp_err_t result = esp_now_send(0, (uint8_t *) &test, sizeof(test_struct));
-  Serial.println(result == ESP_OK ? "Sent with success" : "Error sendint the data");
-    
-  delay(500);
 }
 
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
-  char macStr[18];
-  Serial.print("Packet to: ");
-  // Copies the sender mac address to a string
-  snprintf(macStr, sizeof(macStr), "%02x:%02x:%02x:%02x:%02x:%02x",
-           mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
-  Serial.print(macStr);
-  Serial.print(" send status:\t");
-  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
+  
 }
 
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
   Serial.println("Dane otrzymane via ESP-NOW");
   // Tutaj możesz dodać logikę do przetwarzania otrzymanych danych
-}
-
-String macAddressToString(const uint8_t* macAddr) {
-  char macStr[18];
-  snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-           macAddr[0], macAddr[1], macAddr[2], macAddr[3], macAddr[4], macAddr[5]);
-  return String(macStr);
 }

@@ -31,14 +31,14 @@ NTPClient timeClient(ntpUDP, "pool.ntp.org", 3600, 60000); // Adjust for your ti
 #define BTN_UP 27
 #define BTN_MIDDLE 26
 #define BTN_DOWN 25
+#define BTN_OFF 14
 
-typedef struct test_struct {
-  int x;
-  int y;
-} test_struct;
+typedef struct {
+  bool activateModule;
+} esp_now_message_t;
 
-//Create a struct_message called myData
-test_struct myData;
+esp_now_message_t alarmMessage;
+struct tm timeinfo;
 
 // Initialize the TFT display
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
@@ -50,19 +50,14 @@ esp_now_peer_info_t peerInfo;
 bool alarm_mode = false;
 int alarmHour = 0;
 int alarmMinute = 0;
-bool isSettingHour = true;
-
-bool lastMiddleButtonState = HIGH;
-unsigned long lastDebounceTime = 0;
-unsigned long debounceDelay = 50; // Debounce delay in milliseconds
-bool hourChanged = false;
-bool minuteChanged = false;
+bool settingHour = false;
 
 void setup() {
   // pin mode setup
   pinMode(BTN_UP, INPUT_PULLUP);
   pinMode(BTN_MIDDLE, INPUT_PULLUP);
   pinMode(BTN_DOWN, INPUT_PULLUP);
+  pinMode(BTN_OFF, INPUT_PULLUP);
   
   Serial.begin(115200);
   
@@ -75,8 +70,7 @@ void setup() {
   
   // Wifi setup
   WiFi.mode(WIFI_STA);  
-  WiFi.begin(ssid, password);
-  connectWifi(); // Initialize WIFI and ESP-NOW
+  connectWifi(); 
   
   // esp-now setup
   if (esp_now_init() != ESP_OK) {
@@ -100,50 +94,52 @@ void setup() {
 
 void loop() {
   if (WiFi.status() != WL_CONNECTED) {
-    connectWifi(); // Reconnect to Wi-Fi if connection is lost
+    connectWifi();
   }
 
   if (digitalRead(BTN_MIDDLE) == LOW) {
     alarm_mode = true; 
   }
+
+  if (digitalRead(BTN_OFF) == LOW) {
+    alarm_mode = false; 
+  }
   
-  if (alarm_mode == false) {
-    timeClient.update();
-    displayDateTime();
-    delay(1000);
-  } else if (alarm_mode == true) {
+  if (!alarm_mode) {
+    // displayDateTime();
+    checkAndTriggerAlarm();
+  } else {
     alarmSetter();
   }
 }
 
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
-  Serial.print("Dane wysłane do: ");
-  Serial.println(macAddressToString(mac_addr));
+  Serial.print(" send status:\t");
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
 }
 
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
-  memcpy(&myData, incomingData, sizeof(myData));
-  Serial.print("Bytes received: ");
-  Serial.println(len);
-  Serial.print("x: ");
-  Serial.println(myData.x);
-  Serial.print("y: ");
-  Serial.println(myData.y);
-  Serial.println();
+  
 }
 
-String macAddressToString(const uint8_t* macAddr) {
-  char macStr[18];
-  snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-           macAddr[0], macAddr[1], macAddr[2], macAddr[3], macAddr[4], macAddr[5]);
-  return String(macStr);
-}
+void checkAndTriggerAlarm() {
+  // timeClient.update();
+  // int currentHour = timeClient.getHours();
+  // int currentMinute = timeClient.getMinutes();
 
+  // Compare current time with alarm time
+  // if (currentHour == alarmHour && currentMinute == alarmMinute) {
+
+  alarmMessage.activateModule = true;
+  esp_err_t result = esp_now_send(remoteMac, (uint8_t *)&alarmMessage, sizeof(alarmMessage));
+  Serial.println(result == ESP_OK ? "Sent with success" : "Error sendint the data");
+}
 
 void connectWifi() {
   tft.fillScreen(ST77XX_BLACK);
   
   while (WiFi.status() != WL_CONNECTED) {  
+    WiFi.begin(ssid, password);
     Serial.println("Connecting to WiFi...");
     tft.fillScreen(ST77XX_BLACK);
     tft.setCursor(10, 50);
@@ -161,7 +157,6 @@ void connectWifi() {
 }
 
 void displayDateTime() {
-  struct tm timeinfo;
   if (!getLocalTime(&timeinfo)) {
     Serial.println("Failed to obtain time");
     return;
@@ -185,62 +180,86 @@ void displayDateTime() {
 }
 
 // Setting alarm clock 
+
+// Function prototypes (if not already defined)
+void addTimeToAlarm();
+void toggleTimeSettingMode();
+void displayAlarmTime();
+
 void alarmSetter() {
-  bool upButtonState = digitalRead(BTN_UP) == LOW;
-  bool downButtonState = digitalRead(BTN_DOWN) == LOW;
-  bool middleButtonState = digitalRead(BTN_MIDDLE) == LOW;
+  static unsigned long lastPressTime = 0;
+  unsigned long pressInterval = 1; // Extremely short time between increments
 
-  if (upButtonState) {
-    if (isSettingHour) {
-      alarmHour = (alarmHour + 1) % 24;
-      hourChanged = true;
-    } else {
-      alarmMinute = (alarmMinute + 1) % 60;
-      minuteChanged = true;
+  // Check if the UP button is pressed
+  if (digitalRead(BTN_UP) == LOW) {
+    if (millis() - lastPressTime > pressInterval) {
+      addTimeToAlarm();
+      lastPressTime = millis();
     }
-    delay(200); // Debounce delay for UP and DOWN buttons
   }
+
+  // Check if the DOWN button is pressed
+  if (digitalRead(BTN_DOWN) == LOW) {
+    if (millis() - lastPressTime > pressInterval) {
+      decreaseTimeFromAlarm();
+      lastPressTime = millis();
+    }
+  }
+
+  // Toggle between hour and minute setting with the middle button
+  if (digitalRead(BTN_MIDDLE) == LOW) {
+    toggleTimeSettingMode();
+    delay(200); // Delay to prevent rapid toggling
+  }
+
   
-  if (downButtonState) {
-    if (isSettingHour) {
-      alarmHour = (alarmHour + 23) % 24;
-      hourChanged = true;
-    } else {
-      alarmMinute = (alarmMinute + 59) % 60;
-      minuteChanged = true;
+
+  // Display the current alarm time
+  displayAlarmTime();
+}
+
+void addTimeToAlarm() {
+  if (settingHour) {
+    alarmHour = (alarmHour + 1) % 24; // Increment hour
+  } else {
+    alarmMinute++;
+    if (alarmMinute >= 60) {
+      alarmMinute = 0;
     }
-    delay(200); // Debounce delay for UP and DOWN buttons
-  }
-
-  // Debounce for middle button
-  if (middleButtonState != lastMiddleButtonState) {
-    lastDebounceTime = millis();
-  }
-
-  if ((millis() - lastDebounceTime) > debounceDelay) {
-    if (middleButtonState == LOW && lastMiddleButtonState == HIGH) {
-      if (isSettingHour) {
-        isSettingHour = false;
-      } else {
-        alarm_mode = false;
-        isSettingHour = true;
-      }
-    }
-  }
-  lastMiddleButtonState = middleButtonState;
-
-  // Update the screen only if there is a change
-  if (hourChanged || minuteChanged) {
-    tft.fillScreen(ST77XX_BLACK);
-    tft.setCursor(30, 50);
-    tft.print("Set Alarm: ");
-    tft.setCursor(30, 70);
-    tft.print(alarmHour);
-    tft.print(":");
-    if (alarmMinute < 10) tft.print("0");
-    tft.print(alarmMinute);
-    hourChanged = false;
-    minuteChanged = false;
   }
 }
 
+void decreaseTimeFromAlarm() {
+  if (settingHour) {
+    alarmHour = (alarmHour == 0) ? 23 : alarmHour - 1;
+  } else {
+    alarmMinute = (alarmMinute == 0) ? 59 : alarmMinute - 1;
+  }
+}
+
+void toggleTimeSettingMode() {
+  settingHour = !settingHour; // Toggle between hour and minute setting
+}
+
+// Global variables for the last displayed time
+int lastDisplayedHour = -1;
+int lastDisplayedMinute = -1;
+
+void displayAlarmTime() {
+  // Check if the time has changed since the last update
+  if (alarmHour != lastDisplayedHour || alarmMinute != lastDisplayedMinute) {
+    // Update the last displayed time
+    lastDisplayedHour = alarmHour;
+    lastDisplayedMinute = alarmMinute;
+
+    // Format and display the new time
+    char buffer[6];
+    sprintf(buffer, "%02d:%02d", alarmHour, alarmMinute);
+
+    tft.fillScreen(ST77XX_BLACK);
+    tft.setCursor(40, 60); // Adjust the cursor position as needed
+    tft.print(buffer);
+    tft.setCursor(40, 30);
+    tft.print("Set time: ");
+  }
+}
