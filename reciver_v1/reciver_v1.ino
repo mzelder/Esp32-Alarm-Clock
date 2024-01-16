@@ -10,11 +10,21 @@
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 #include <time.h>
+#include "SoftwareSerial.h"
+#include "DFRobotDFPlayerMini.h"
 
-// [Twój dotychczasowy kod...]
 // Wi-Fi credentials - change it for your WIFI
 const char* ssid = "iPhone";
 const char* password = "12345678";
+
+// Use pins 2 and 3 to communicate with DFPlayer Mini
+static const uint8_t PIN_MP3_TX = 32; // Connects to module's RX 
+static const uint8_t PIN_MP3_RX = 33; // Connects to module's TX 
+SoftwareSerial softwareSerial(PIN_MP3_RX, PIN_MP3_TX);
+
+// Create the Player object
+DFRobotDFPlayerMini player;
+
 
 // NTP Client
 WiFiUDP ntpUDP;
@@ -33,11 +43,16 @@ NTPClient timeClient(ntpUDP, "pool.ntp.org", 3600, 60000); // Adjust for your ti
 #define BTN_DOWN 25
 #define BTN_OFF 14
 
-typedef struct {
-  bool activateModule;
-} esp_now_message_t;
+// DFD Player pins
+#define RX 16
+#define TX 17
 
-esp_now_message_t alarmMessage;
+typedef struct struct_message {
+  int b;
+} struct_message;
+
+struct_message myData;
+
 struct tm timeinfo;
 
 // Initialize the TFT display
@@ -52,7 +67,22 @@ int alarmHour = 0;
 int alarmMinute = 0;
 bool settingHour = false;
 
+unsigned long previousMillis = 0; // Will store last time the display was updated
+const long interval = 1000; // Interval at which to update the display (milliseconds)
+bool timeFetched = false; // Flag to check if time has been fetched
+
 void setup() {
+  // initalize dfplayer mini
+  softwareSerial.begin(9600);
+  // Start communication with DFPlayer Mini
+  if (player.begin(softwareSerial)) {
+   Serial.println("OK");
+   player.volume(30);
+  } else {
+    Serial.println("Connecting to DFPlayer Mini failed!");
+  }
+  
+  myData.b = 0;
   // pin mode setup
   pinMode(BTN_UP, INPUT_PULLUP);
   pinMode(BTN_MIDDLE, INPUT_PULLUP);
@@ -68,9 +98,36 @@ void setup() {
   tft.setTextSize(1);
   tft.setTextColor(ST77XX_WHITE);
   
-  // Wifi setup
-  WiFi.mode(WIFI_STA);  
-  connectWifi(); 
+  // Initialize and connect to WiFi
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Connecting to WiFi...");
+    tft.fillScreen(ST77XX_BLACK);
+    tft.setCursor(10, 50);
+    tft.print("Connecting to WiFi...");
+    delay(500);    
+  }
+  Serial.println("Connected to WiFi!");    
+  tft.fillScreen(ST77XX_BLACK);
+  tft.setCursor(10, 50);
+  tft.print("Connected to WiFi!");
+
+  // Fetch time and date
+  configTime(0, 3600, "pool.ntp.org", "time.nist.gov"); // Set timezone and NTP server
+  if (!getLocalTime(&timeinfo)) {
+    Serial.println("Failed to obtain time");
+  } else {
+    timeFetched = true; // Set flag as true after fetching time
+    displayDateTime(); // Display time immediately after fetching
+  }
+
+  timeinfo.tm_hour++;
+
+  // Disconnect from WiFi
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_STA);
+  Serial.println("Disconnected from WiFi"); 
   
   // esp-now setup
   if (esp_now_init() != ESP_OK) {
@@ -81,7 +138,7 @@ void setup() {
   esp_now_register_send_cb(OnDataSent);
   esp_now_register_recv_cb(OnDataRecv);
 
-  peerInfo.channel = 6;  
+  peerInfo.channel = 0;  
   peerInfo.encrypt = false;
   memcpy(peerInfo.peer_addr, remoteMac, 6);
 
@@ -91,25 +148,40 @@ void setup() {
   }
 }
 
-
 void loop() {
-  if (WiFi.status() != WL_CONNECTED) {
-    connectWifi();
+  unsigned long currentMillis = millis();
+  if (timeFetched && currentMillis - previousMillis >= interval) {
+    previousMillis = currentMillis; // Save the last time you updated the display
+    timeinfo.tm_sec += 1; // Increment the second
+    mktime(&timeinfo); // Normalize the time structure
+    
+    if (!alarm_mode) {
+      if (alarmHour == timeinfo.tm_hour && alarmMinute == timeinfo.tm_min && myData.b == 0) {
+        myData.b = 1;
+      }
+      if (myData.b == 1) {
+        player.play(1);
+        esp_err_t result = esp_now_send(remoteMac, (uint8_t *) &myData, sizeof(myData));
+        if (result == ESP_OK) {
+          Serial.println("Sent with success");
+          myData.b = 2;
+        } else {
+          Serial.println("Error sendint the data");
+        }
+        
+      }
+      displayDateTime();
+    } else {
+      alarmSetter();
+    }
   }
-
+  
   if (digitalRead(BTN_MIDDLE) == LOW) {
     alarm_mode = true; 
   }
 
   if (digitalRead(BTN_OFF) == LOW) {
     alarm_mode = false; 
-  }
-  
-  if (!alarm_mode) {
-    // displayDateTime();
-    checkAndTriggerAlarm();
-  } else {
-    alarmSetter();
   }
 }
 
@@ -119,64 +191,24 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
 }
 
 void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
-  
-}
-
-void checkAndTriggerAlarm() {
-  // timeClient.update();
-  // int currentHour = timeClient.getHours();
-  // int currentMinute = timeClient.getMinutes();
-
-  // Compare current time with alarm time
-  // if (currentHour == alarmHour && currentMinute == alarmMinute) {
-
-  alarmMessage.activateModule = true;
-  esp_err_t result = esp_now_send(remoteMac, (uint8_t *)&alarmMessage, sizeof(alarmMessage));
-  Serial.println(result == ESP_OK ? "Sent with success" : "Error sendint the data");
-}
-
-void connectWifi() {
-  tft.fillScreen(ST77XX_BLACK);
-  
-  while (WiFi.status() != WL_CONNECTED) {  
-    WiFi.begin(ssid, password);
-    Serial.println("Connecting to WiFi...");
-    tft.fillScreen(ST77XX_BLACK);
-    tft.setCursor(10, 50);
-    tft.print("Connecting to WiFi...");
-    delay(500);    
-  }
-  
-  Serial.println("Connected to WiFi!");    
-  tft.fillScreen(ST77XX_BLACK);
-  tft.setCursor(10, 50);
-  tft.print("Connected to WiFi!");
-
-  configTime(0, 3600, "pool.ntp.org", "time.nist.gov"); // Set timezone and NTP server
-  timeClient.begin(); // Start NTP client
+  player.stop();
+  delay(60000);
+  memcpy(&myData, incomingData, sizeof(myData));
+  Serial.println(myData.b);
 }
 
 void displayDateTime() {
-  if (!getLocalTime(&timeinfo)) {
-    Serial.println("Failed to obtain time");
-    return;
-  }
-
-  char dateBuffer[20];
-  strftime(dateBuffer, sizeof(dateBuffer), "%Y/%m/%d", &timeinfo); // Format the date
-  String currentDate = String(dateBuffer);
-
-  String currentTime = timeClient.getFormattedTime();
-
+    char timeBuffer[9];
+  sprintf(timeBuffer, "%02d:%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+  
   tft.fillScreen(ST77XX_BLACK);
+  tft.setCursor(30, 60);
+  tft.print(timeBuffer);
 
-  // Set cursor for time and print
-  tft.setCursor(30, 60); // Adjust cursor position as needed
-  tft.print(currentTime);
-
-  // Set cursor for date and print
-  tft.setCursor(25, 20); // Adjust cursor position as needed
-  tft.print(currentDate);
+  char dateBuffer[11];
+  sprintf(dateBuffer, "%04d/%02d/%02d", (timeinfo.tm_year + 1900), (timeinfo.tm_mon + 1), timeinfo.tm_mday);
+  tft.setCursor(25, 20);
+  tft.print(dateBuffer);
 }
 
 // Setting alarm clock 
